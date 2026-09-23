@@ -1,0 +1,22 @@
+# Build output directories
+target/
+
+# Compiled class files
+*.class
+
+# Log files
+*.log
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.settings/
+.classpath
+.project
+
+# OS generated files
+.DS_Store
+Thumbs.db
