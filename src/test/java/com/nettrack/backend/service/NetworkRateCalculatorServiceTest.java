@@ -239,7 +239,7 @@ class NetworkRateCalculatorServiceTest {
 
         NetworkRateResult result = calculatorService.calculateRate(start, end, largeDuration);
 
-        assertTrue(result.dura tionSeconds() > 0.0);
+        assertTrue(result.durationSeconds() > 0.0);
         assertTrue(Double.isFinite(result.rxBytesPerSecond()));
         assertTrue(Double.isFinite(result.txBytesPerSecond()));
         assertTrue(result.rxBytesPerSecond() > 0.0);
