@@ -96,8 +96,10 @@ class NetworkRateCalculatorServiceTest {
         NetworkInterfaceStats end = new NetworkInterfaceStats("wlp3s0", 2000L, 1000L);
 
         assertThrows(IllegalArgumentException.class, () -> calculatorService.calculateRate(start, end, Duration.ZERO));
-        assertThrows(IllegalArgumentException.class, () -> calculatorService.calculateRate(start, end, Duration.ofSeconds(-1)));
-        assertThrows(IllegalArgumentException.class, () -> calculatorService.calculateRate(start, end, Duration.ofMillis(-500)));
+        assertThrows(IllegalArgumentException.class,
+                () -> calculatorService.calculateRate(start, end, Duration.ofSeconds(-1)));
+        assertThrows(IllegalArgumentException.class,
+                () -> calculatorService.calculateRate(start, end, Duration.ofMillis(-500)));
     }
 
     @Test
@@ -123,17 +125,20 @@ class NetworkRateCalculatorServiceTest {
 
         // Unsupported interface name (identical)
         NetworkInterfaceStats startEth = new NetworkInterfaceStats("eth0", 1000L, 500L);
-        assertThrows(IllegalArgumentException.class, () -> calculatorService.calculateRate(startEth, startEth, duration));
+        assertThrows(IllegalArgumentException.class,
+                () -> calculatorService.calculateRate(startEth, startEth, duration));
 
         // Null interface name
         NetworkInterfaceStats startNull = new NetworkInterfaceStats(null, 1000L, 500L);
         NetworkInterfaceStats endNull = new NetworkInterfaceStats(null, 2000L, 1000L);
-        assertThrows(IllegalArgumentException.class, () -> calculatorService.calculateRate(startNull, endNull, duration));
+        assertThrows(IllegalArgumentException.class,
+                () -> calculatorService.calculateRate(startNull, endNull, duration));
 
         // Blank interface name
         NetworkInterfaceStats startBlank = new NetworkInterfaceStats("   ", 1000L, 500L);
         NetworkInterfaceStats endBlank = new NetworkInterfaceStats("   ", 2000L, 1000L);
-        assertThrows(IllegalArgumentException.class, () -> calculatorService.calculateRate(startBlank, endBlank, duration));
+        assertThrows(IllegalArgumentException.class,
+                () -> calculatorService.calculateRate(startBlank, endBlank, duration));
     }
 
     @Test
@@ -234,7 +239,7 @@ class NetworkRateCalculatorServiceTest {
 
         NetworkRateResult result = calculatorService.calculateRate(start, end, largeDuration);
 
-        assertTrue(result.durationSeconds() > 0.0);
+        assertTrue(result.dura tionSeconds() > 0.0);
         assertTrue(Double.isFinite(result.rxBytesPerSecond()));
         assertTrue(Double.isFinite(result.txBytesPerSecond()));
         assertTrue(result.rxBytesPerSecond() > 0.0);
