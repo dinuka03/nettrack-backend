@@ -16,11 +16,13 @@ import org.springframework.dao.DataAccessException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -544,6 +546,185 @@ class NetworkIntervalUsageRepositoryTest {
             assertEquals(500L, row.txBytesDelta());
             assertEquals(10.0, row.durationSeconds(), 1e-9);
             assertEquals(FIXED_INSTANT, row.recordedAt());
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // 26. findRecent on empty table returns empty list
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("26. findRecent on empty table returns empty list")
+    void findRecentOnEmptyTableReturnsEmptyList() {
+        Path db = tempDir.resolve("recent_empty.db");
+        contextRunner(db).run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+            var repo = ctx.getBean(NetworkIntervalUsageRepository.class);
+
+            List<NetworkIntervalUsage> results = repo.findRecent(10);
+            assertNotNull(results);
+            assertTrue(results.isEmpty());
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // 27. findRecent maps all fields accurately
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("27. findRecent correctly maps all six NetworkIntervalUsage fields")
+    void findRecentMapsAllFieldsAccurately() {
+        Path db = tempDir.resolve("recent_mapping.db");
+        contextRunner(db).run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+            var repo = ctx.getBean(NetworkIntervalUsageRepository.class);
+
+            long insertedId = repo.insert(VALID_RESULT, FIXED_INSTANT);
+
+            List<NetworkIntervalUsage> results = repo.findRecent(10);
+            assertEquals(1, results.size());
+
+            NetworkIntervalUsage row = results.get(0);
+            assertEquals(insertedId, row.id());
+            assertEquals("wlp3s0", row.interfaceName());
+            assertEquals(1000L, row.rxBytesDelta());
+            assertEquals(500L, row.txBytesDelta());
+            assertEquals(10.0, row.durationSeconds(), 1e-9);
+            assertEquals(FIXED_INSTANT, row.recordedAt());
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // 28. findRecent orders newest first across different timestamps
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("28. findRecent orders records newest first across different timestamps")
+    void findRecentOrdersNewestFirstAcrossDifferentTimestamps() {
+        Path db = tempDir.resolve("recent_ordering.db");
+        contextRunner(db).run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+            var repo = ctx.getBean(NetworkIntervalUsageRepository.class);
+
+            Instant t1 = FIXED_INSTANT;
+            Instant t2 = FIXED_INSTANT.plusSeconds(1);
+            Instant t3 = FIXED_INSTANT.plusSeconds(2);
+
+            repo.insert(new NetworkRateResult("wlp3s0", 100L, 10L, 100.0, 10.0, 1.0), t1);
+            repo.insert(new NetworkRateResult("wlp3s0", 200L, 20L, 200.0, 20.0, 1.0), t2);
+            repo.insert(new NetworkRateResult("wlp3s0", 300L, 30L, 300.0, 30.0, 1.0), t3);
+
+            List<NetworkIntervalUsage> results = repo.findRecent(10);
+            assertEquals(3, results.size());
+
+            // Order must be t3, t2, t1 (newest first)
+            assertEquals(t3, results.get(0).recordedAt());
+            assertEquals(300L, results.get(0).rxBytesDelta());
+
+            assertEquals(t2, results.get(1).recordedAt());
+            assertEquals(200L, results.get(1).rxBytesDelta());
+
+            assertEquals(t1, results.get(2).recordedAt());
+            assertEquals(100L, results.get(2).rxBytesDelta());
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // 29. findRecent resolves equal timestamps deterministically by descending ID
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("29. findRecent resolves equal timestamps deterministically by descending ID")
+    void findRecentResolvesEqualTimestampsByDescendingId() {
+        Path db = tempDir.resolve("recent_tiebreak.db");
+        contextRunner(db).run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+            var repo = ctx.getBean(NetworkIntervalUsageRepository.class);
+
+            long id1 = repo.insert(new NetworkRateResult("wlp3s0", 100L, 10L, 100.0, 10.0, 1.0), FIXED_INSTANT);
+            long id2 = repo.insert(new NetworkRateResult("wlp3s0", 200L, 20L, 200.0, 20.0, 1.0), FIXED_INSTANT);
+
+            List<NetworkIntervalUsage> results = repo.findRecent(10);
+            assertEquals(2, results.size());
+
+            // Newer inserted row (id2) must appear before older row (id1)
+            assertTrue(id2 > id1);
+            assertEquals(id2, results.get(0).id());
+            assertEquals(200L, results.get(0).rxBytesDelta());
+
+            assertEquals(id1, results.get(1).id());
+            assertEquals(100L, results.get(1).rxBytesDelta());
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // 30. findRecent enforces limit smaller than row count
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("30. findRecent enforces limit smaller than row count and returns newest records")
+    void findRecentEnforcesLimitSmallerThanRowCount() {
+        Path db = tempDir.resolve("recent_limit.db");
+        contextRunner(db).run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+            var repo = ctx.getBean(NetworkIntervalUsageRepository.class);
+
+            Instant base = FIXED_INSTANT;
+            for (int i = 1; i <= 5; i++) {
+                repo.insert(new NetworkRateResult("wlp3s0", i * 100L, 10L, 10.0, 10.0, 1.0),
+                        base.plusSeconds(i));
+            }
+
+            // Request top 2
+            List<NetworkIntervalUsage> results = repo.findRecent(2);
+            assertEquals(2, results.size());
+
+            // Must be rows 5 and 4 (newest)
+            assertEquals(base.plusSeconds(5), results.get(0).recordedAt());
+            assertEquals(500L, results.get(0).rxBytesDelta());
+
+            assertEquals(base.plusSeconds(4), results.get(1).recordedAt());
+            assertEquals(400L, results.get(1).rxBytesDelta());
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // 31. findRecent with limit larger than row count returns all rows
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("31. findRecent with limit larger than row count returns all available rows")
+    void findRecentWithLimitLargerThanRowCountReturnsAllRows() {
+        Path db = tempDir.resolve("recent_limit_large.db");
+        contextRunner(db).run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+            var repo = ctx.getBean(NetworkIntervalUsageRepository.class);
+
+            repo.insert(new NetworkRateResult("wlp3s0", 100L, 10L, 10.0, 10.0, 1.0), FIXED_INSTANT.plusSeconds(1));
+            repo.insert(new NetworkRateResult("wlp3s0", 200L, 20L, 20.0, 20.0, 1.0), FIXED_INSTANT.plusSeconds(2));
+            repo.insert(new NetworkRateResult("wlp3s0", 300L, 30L, 30.0, 30.0, 1.0), FIXED_INSTANT.plusSeconds(3));
+
+            List<NetworkIntervalUsage> results = repo.findRecent(100);
+            assertEquals(3, results.size());
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // 32. findRecent rejects zero and negative limits
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("32. findRecent rejects zero and negative limits with IllegalArgumentException")
+    void findRecentRejectsZeroAndNegativeLimits() {
+        Path db = tempDir.resolve("recent_invalid_limit.db");
+        contextRunner(db).run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+            var repo = ctx.getBean(NetworkIntervalUsageRepository.class);
+
+            assertThrows(IllegalArgumentException.class, () -> repo.findRecent(0));
+            assertThrows(IllegalArgumentException.class, () -> repo.findRecent(-1));
+            assertThrows(IllegalArgumentException.class, () -> repo.findRecent(-100));
+            assertThrows(IllegalArgumentException.class, () -> repo.findRecent(Integer.MIN_VALUE));
         });
     }
 

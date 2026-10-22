@@ -42,6 +42,13 @@ public class NetworkIntervalUsageRepository {
             "duration_seconds, recorded_at_epoch_ms " +
             "FROM network_interval_usage WHERE id = ?";
 
+    private static final String FIND_RECENT_SQL =
+            "SELECT id, interface_name, rx_bytes_delta, tx_bytes_delta, " +
+            "duration_seconds, recorded_at_epoch_ms " +
+            "FROM network_interval_usage " +
+            "ORDER BY recorded_at_epoch_ms DESC, id DESC " +
+            "LIMIT ?";
+
     private static final String REQUIRED_INTERFACE = "wlp3s0";
 
     private static final RowMapper<NetworkIntervalUsage> ROW_MAPPER = (rs, rowNum) ->
@@ -154,5 +161,24 @@ public class NetworkIntervalUsageRepository {
         List<NetworkIntervalUsage> results =
                 jdbcTemplate.query(FIND_BY_ID_SQL, ROW_MAPPER, id);
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+    }
+
+    /**
+     * Retrieves recent network interval usage records ordered newest first.
+     *
+     * <p>Ordering is strictly deterministic: {@code recorded_at_epoch_ms DESC, id DESC}.</p>
+     *
+     * <p>Database failures propagate as {@link org.springframework.dao.DataAccessException}.</p>
+     *
+     * @param limit maximum number of rows to return; must be strictly positive
+     * @return list of matching records ordered newest first, or empty list if no records exist
+     * @throws IllegalArgumentException if {@code limit} is zero or negative
+     * @throws org.springframework.dao.DataAccessException on database failure
+     */
+    public List<NetworkIntervalUsage> findRecent(int limit) {
+        if (limit <= 0) {
+            throw new IllegalArgumentException("limit must be positive, got: " + limit);
+        }
+        return jdbcTemplate.query(FIND_RECENT_SQL, ROW_MAPPER, limit);
     }
 }

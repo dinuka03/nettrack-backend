@@ -5,9 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nettrack.backend.model.MonitoringStatus;
 import com.nettrack.backend.model.NetworkMonitoringState;
 import com.nettrack.backend.model.NetworkRateResult;
+import com.nettrack.backend.model.NetworkIntervalUsage;
+import com.nettrack.backend.repository.NetworkIntervalUsageRepository;
 import com.nettrack.backend.service.NetworkMonitoringStateHolder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.ApplicationContext;
@@ -19,6 +23,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.time.Instant;
+import java.util.Collections;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -28,9 +34,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(NetworkMonitoringController.class)
@@ -49,6 +58,9 @@ class NetworkMonitoringControllerTest {
     @MockitoBean
     private NetworkMonitoringStateHolder stateHolder;
 
+    @MockitoBean
+    private NetworkIntervalUsageRepository repository;
+
     private static final Instant T1 = Instant.parse("2026-10-17T12:00:00Z");
     private static final Instant T2 = Instant.parse("2026-10-17T12:00:01Z");
     private static final Instant T3 = Instant.parse("2026-10-17T12:00:02Z");
@@ -56,9 +68,10 @@ class NetworkMonitoringControllerTest {
     private static final Instant T_FRACTIONAL = Instant.parse("2026-10-17T12:00:00.123456789Z");
 
     @Test
-    @DisplayName("1. Constructor rejects null NetworkMonitoringStateHolder")
-    void constructorRejectsNullStateHolder() {
-        assertThrows(NullPointerException.class, () -> new NetworkMonitoringController(null));
+    @DisplayName("1. Constructor rejects null dependencies")
+    void constructorRejectsNullDependencies() {
+        assertThrows(NullPointerException.class, () -> new NetworkMonitoringController(null, repository));
+        assertThrows(NullPointerException.class, () -> new NetworkMonitoringController(stateHolder, null));
     }
 
     @Test
@@ -260,5 +273,86 @@ class NetworkMonitoringControllerTest {
                 "networkRateCalculatorService must not be loaded in MVC slice");
         assertFalse(applicationContext.containsBean("procNetDevReaderService"),
                 "procNetDevReaderService must not be loaded in MVC slice");
+    }
+
+    @Test
+    @DisplayName("12. Omitting limit calls repository with default 100 and returns HTTP 200 with no-store")
+    void historyEndpointDefaultsLimitTo100() throws Exception {
+        when(repository.findRecent(100)).thenReturn(Collections.emptyList());
+
+        mockMvc.perform(get("/api/network/history"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE))
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
+                .andExpect(content().json("[]"));
+
+        verify(repository, times(1)).findRecent(100);
+    }
+
+    @Test
+    @DisplayName("13. Custom limit is forwarded to repository")
+    void historyEndpointForwardsCustomLimit() throws Exception {
+        when(repository.findRecent(25)).thenReturn(Collections.emptyList());
+
+        mockMvc.perform(get("/api/network/history").param("limit", "25"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE))
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
+                .andExpect(content().json("[]"));
+
+        verify(repository, times(1)).findRecent(25);
+    }
+
+    @Test
+    @DisplayName("14. Empty repository result returns HTTP 200 and empty JSON array")
+    void historyEndpointReturnsEmptyArrayWhenNoRecords() throws Exception {
+        when(repository.findRecent(100)).thenReturn(Collections.emptyList());
+
+        mockMvc.perform(get("/api/network/history"))
+                .andExpect(status().isOk())
+                .andExpect(content().json("[]"));
+    }
+
+    @Test
+    @DisplayName("15. Returned JSON contains expected fields and ISO-8601 UTC timestamp")
+    void historyEndpointReturnsExpectedFieldsAndTimestamp() throws Exception {
+        NetworkIntervalUsage record = new NetworkIntervalUsage(
+                42L, "wlp3s0", 12345L, 6789L, 1.998, Instant.parse("2026-10-22T08:30:00Z")
+        );
+        when(repository.findRecent(100)).thenReturn(List.of(record));
+
+        mockMvc.perform(get("/api/network/history"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE))
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(42))
+                .andExpect(jsonPath("$[0].interfaceName").value("wlp3s0"))
+                .andExpect(jsonPath("$[0].rxBytesDelta").value(12345))
+                .andExpect(jsonPath("$[0].txBytesDelta").value(6789))
+                .andExpect(jsonPath("$[0].durationSeconds").value(1.998))
+                .andExpect(jsonPath("$[0].recordedAt").value("2026-10-22T08:30:00Z"));
+
+        verify(repository, times(1)).findRecent(100);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "-5", "1001"})
+    @DisplayName("16. Limits outside 1..1000 produce HTTP 400 and do not query repository")
+    void historyEndpointRejectsInvalidLimits(String invalidLimit) throws Exception {
+        mockMvc.perform(get("/api/network/history").param("limit", invalidLimit))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    @DisplayName("17. Non-numeric limit produces HTTP 400 and does not query repository")
+    void historyEndpointRejectsNonNumericLimit() throws Exception {
+        mockMvc.perform(get("/api/network/history").param("limit", "invalid"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(repository);
     }
 }
