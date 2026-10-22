@@ -3,10 +3,12 @@ package com.nettrack.backend.service;
 import com.nettrack.backend.model.MonitoringStatus;
 import com.nettrack.backend.model.NetworkMonitoringState;
 import com.nettrack.backend.model.NetworkRateResult;
+import com.nettrack.backend.repository.NetworkIntervalUsageRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.dao.DataAccessException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -17,7 +19,8 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Periodically triggers network sampling and publishes the latest snapshot to NetworkMonitoringStateHolder.
+ * Periodically triggers network sampling, persists completed intervals to SQLite,
+ * and publishes the latest snapshot to NetworkMonitoringStateHolder.
  */
 @Service
 @ConditionalOnProperty(name = "nettrack.monitoring.enabled", havingValue = "true", matchIfMissing = false)
@@ -27,23 +30,31 @@ public class NetworkMonitoringScheduler {
 
     private final NetworkSamplingService samplingService;
     private final NetworkMonitoringStateHolder stateHolder;
+    private final NetworkIntervalUsageRepository repository;
     private final Clock clock;
 
     private boolean inErrorState = false;
 
     @Autowired
-    public NetworkMonitoringScheduler(NetworkSamplingService samplingService, NetworkMonitoringStateHolder stateHolder) {
-        this(samplingService, stateHolder, Clock.systemUTC());
+    public NetworkMonitoringScheduler(NetworkSamplingService samplingService,
+                                      NetworkMonitoringStateHolder stateHolder,
+                                      NetworkIntervalUsageRepository repository) {
+        this(samplingService, stateHolder, repository, Clock.systemUTC());
     }
 
-    NetworkMonitoringScheduler(NetworkSamplingService samplingService, NetworkMonitoringStateHolder stateHolder, Clock clock) {
+    NetworkMonitoringScheduler(NetworkSamplingService samplingService,
+                               NetworkMonitoringStateHolder stateHolder,
+                               NetworkIntervalUsageRepository repository,
+                               Clock clock) {
         this.samplingService = Objects.requireNonNull(samplingService, "NetworkSamplingService must not be null");
         this.stateHolder = Objects.requireNonNull(stateHolder, "NetworkMonitoringStateHolder must not be null");
+        this.repository = Objects.requireNonNull(repository, "NetworkIntervalUsageRepository must not be null");
         this.clock = Objects.requireNonNull(clock, "Clock must not be null");
     }
 
     /**
-     * Executes a single periodic sampling attempt and publishes the resulting state snapshot.
+     * Executes a single periodic sampling attempt, persists valid completed intervals,
+     * and publishes the resulting state snapshot.
      */
     @Scheduled(fixedDelayString = "${nettrack.monitoring.interval-ms:1000}")
     public synchronized void runPeriodicSample() {
@@ -72,7 +83,14 @@ public class NetworkMonitoringScheduler {
             }
 
             if (sampleResult.isPresent()) {
-                stateHolder.updateState(new NetworkMonitoringState(MonitoringStatus.READY, sampleResult.get(), attemptTimestamp));
+                NetworkRateResult result = sampleResult.get();
+                try {
+                    repository.insert(result, attemptTimestamp);
+                } catch (DataAccessException e) {
+                    log.error("Failed to persist network interval usage for interface '{}': {}",
+                            result.interfaceName(), e.getMessage());
+                }
+                stateHolder.updateState(new NetworkMonitoringState(MonitoringStatus.READY, result, attemptTimestamp));
             } else {
                 stateHolder.updateState(new NetworkMonitoringState(MonitoringStatus.BASELINE_ONLY, null, attemptTimestamp));
             }
