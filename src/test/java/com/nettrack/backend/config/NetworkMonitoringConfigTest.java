@@ -3,6 +3,7 @@ package com.nettrack.backend.config;
 import com.nettrack.backend.model.MonitoringStatus;
 import com.nettrack.backend.model.NetworkInterfaceStats;
 import com.nettrack.backend.model.NetworkRateResult;
+import com.nettrack.backend.repository.NetworkIntervalUsageRepository;
 import com.nettrack.backend.service.NetworkMonitoringScheduler;
 import com.nettrack.backend.service.NetworkMonitoringStateHolder;
 import com.nettrack.backend.service.NetworkRateCalculatorService;
@@ -62,6 +63,16 @@ class NetworkMonitoringConfigTest {
                 public synchronized Optional<NetworkRateResult> sampleRate() throws IOException {
                     counter.incrementAndGet();
                     return Optional.empty(); // Baseline sample
+                }
+            };
+        }
+
+        @Bean
+        public NetworkIntervalUsageRepository networkIntervalUsageRepository() {
+            return new NetworkIntervalUsageRepository(null) {
+                @Override
+                public long insert(NetworkRateResult result, Instant recordedAt) {
+                    return 1L;
                 }
             };
         }
